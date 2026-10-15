@@ -1,0 +1,16 @@
+[Unit]
+Description=blueco - verrouillage de session quand le téléphone s'éloigne
+After=blueco.service
+Wants=blueco.service
+
+[Service]
+Type=simple
+# @BIN@ est remplacé à l'installation par le chemin réel du lanceur.
+# Adaptez --lock-command à votre environnement (GNOME, KDE, sway...).
+ExecStart=@BIN@ watch --interval 10 --failures 3 --lock-command "loginctl lock-session"
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

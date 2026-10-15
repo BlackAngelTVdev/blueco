@@ -1,0 +1,24 @@
+{
+  "device_name": "pc",
+  "token": "",
+  "headphones": {
+    "mac": "AA:BB:CC:DD:EE:FF",
+    "name": ""
+  },
+  "peer": {
+    "mac": "11:22:33:44:55:66",
+    "name": ""
+  },
+  "transport": {
+    "mode": "profile1",
+    "channel": 3,
+    "socket_path": "",
+    "service_name": "blueco",
+    "uuid": "00001101-0000-1000-8000-00805f9b34fb",
+    "service_record": "",
+    "require_authentication": true
+  },
+  "audio_backend": "bluez",
+  "request_timeout_s": 15.0,
+  "lock_command": "loginctl lock-session"
+}

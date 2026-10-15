@@ -1,0 +1,59 @@
+# Maintainer: vous <vous@example.com>
+#
+# Paquet Arch Linux de blueco. Le paquet est construit directement depuis cet
+# arbre de sources (pas de téléchargement) :
+#
+#   BLUECO_SRC=/chemin/vers/blueco makepkg -fi
+#
+# ou via le script fourni :
+#
+#   ./scripts/build-linux.sh --pkg
+
+pkgname=blueco
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Bascule rapide d'écouteurs Bluetooth entre Linux et Android (RFCOMM/SPP, sans Wi-Fi)"
+arch=('any')
+url="https://example.org/blueco"
+license=('MIT')
+depends=('python' 'python-dbus' 'python-gobject' 'bluez' 'bluez-utils')
+optdepends=(
+  'systemd: unités utilisateur blueco.service et blueco-watch.service'
+)
+options=('!strip')
+source=()
+
+# Répertoire des sources : surchargeable, sinon le dépôt parent du PKGBUILD.
+_source_dir="${BLUECO_SRC:-$startdir/..}"
+
+package() {
+  if [[ ! -d "$_source_dir/blueco" ]]; then
+    error "sources introuvables dans $_source_dir (utilisez BLUECO_SRC=...)"
+  fi
+
+  install -dm755 "$pkgdir/usr/lib/blueco"
+  cp -r "$_source_dir/blueco" "$pkgdir/usr/lib/blueco/"
+  find "$pkgdir/usr/lib/blueco" -name '__pycache__' -type d -prune -exec rm -rf {} +
+
+  install -dm755 "$pkgdir/usr/bin"
+  install -Dm755 /dev/stdin "$pkgdir/usr/bin/blueco" <<'LAUNCHER'
+#!/bin/sh
+# Lanceur installé par le paquet blueco.
+PYTHONPATH="/usr/lib/blueco${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m blueco "$@"
+LAUNCHER
+
+  install -dm755 "$pkgdir/usr/lib/systemd/user"
+  for unit in blueco.service blueco-watch.service; do
+    sed 's|@BIN@|/usr/bin/blueco|g' "$_source_dir/packaging/$unit" \
+      > "$pkgdir/usr/lib/systemd/user/$unit"
+  done
+
+  install -dm755 "$pkgdir/usr/share/blueco"
+  install -m644 "$_source_dir/packaging/config.example.json" "$pkgdir/usr/share/blueco/config.example.json"
+
+  install -dm755 "$pkgdir/usr/share/doc/blueco"
+  install -m644 "$_source_dir/README.md" "$pkgdir/usr/share/doc/blueco/"
+  if [[ -d "$_source_dir/docs" ]]; then
+    install -m644 "$_source_dir/docs/"*.md "$pkgdir/usr/share/doc/blueco/"
+  fi
+}

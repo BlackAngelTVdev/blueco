@@ -1,0 +1,15 @@
+[Unit]
+Description=blueco - bascule d'écouteurs Bluetooth entre Linux et Android
+Documentation=man:blueco(1)
+After=graphical-session.target
+
+[Service]
+Type=simple
+# @BIN@ est remplacé à l'installation par le chemin réel du lanceur
+ExecStart=@BIN@ serve -v
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,25 @@
+# blueco - fichier sudoers FACULTATIF et volontairement inactif.
+#
+# Dans le cas nominal, blueco n'a besoin d'aucun privilège :
+#   * la connexion/déconnexion du casque passe par D-Bus (bluetoothd tourne
+#     déjà en root, c'est lui qui exécute l'action) ;
+#   * la commande de verrouillage par défaut, « loginctl lock-session »,
+#     fonctionne pour l'utilisateur connecté.
+#
+# Ce fichier n'est utile que si VOUS choisissez une commande de verrouillage
+# ou de suspension qui exige root. Chaque ligne ci-dessous est commentée :
+# décommentez uniquement celle que vous voulez, puis installez le fichier avec
+#
+#   sudo install -m 0440 packaging/blueco.sudoers /etc/sudoers.d/blueco
+#   sudo visudo -c            # vérification
+#
+# ATTENTION : une ligne NOPASSWD donne un accès root sans mot de passe sur la
+# commande visée. Restez le plus restrictif possible (pas de joker).
+#
+# %wheel ALL=(root) NOPASSWD: /usr/bin/loginctl lock-session
+# %wheel ALL=(root) NOPASSWD: /usr/bin/loginctl lock-sessions
+# %wheel ALL=(root) NOPASSWD: /usr/bin/systemctl suspend
+#
+# Si vous préférez laisser blueco piloter bluetoothctl en tant que service
+# système, donnez uniquement les sous-commandes nécessaires :
+# %wheel ALL=(root) NOPASSWD: /usr/bin/bluetoothctl connect *, /usr/bin/bluetoothctl disconnect *
