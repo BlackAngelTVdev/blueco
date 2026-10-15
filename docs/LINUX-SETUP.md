@@ -4,6 +4,25 @@ L'installation est volontairement déclarative : le démon **n'a besoin d'aucun
 privilège** et ne modifie aucune configuration système. L'appairage Bluetooth
 est fait une fois pour toutes avec `bluetoothctl`.
 
+## 0. Tout d'un coup (recommandé)
+
+Téléphone branché en USB, débogage USB activé :
+
+```bash
+./scripts/setup-blueco.sh            # configure le PC **et** le téléphone
+./scripts/setup-blueco.sh --test     # + vérifie une vraie bascule, aller-retour
+```
+
+Le script lit le téléphone (adresse Bluetooth, écouteurs réellement utilisés),
+l'appaire au PC si besoin, écrit `~/.config/blueco/config.json`, installe le
+lanceur et l'unité systemd, démarre le service, puis attend la liaison et
+affiche l'état. `--power` autorise `sudo` pour les paquets Arch manquants ;
+`--no-build` évite de recompiler l'appli ; `--dry-run` montre tout sans rien
+écrire.
+
+Les sections suivantes détaillent ce que le script fait, si tu préfères le
+faire à la main.
+
 ## 1. Paquets
 
 ```bash
@@ -134,9 +153,25 @@ blueco watch --interval 10 --failures 3 --lock-command "loginctl lock-session"
   ce qui suffit pour « le téléphone s'est éloigné ».
 * Le service correspondant : `systemctl --user enable --now blueco-watch`.
 
-## 7. Si BlueZ refuse l'enregistrement du profil SPP
+## 7. Enregistrement SPP et refus de BlueZ
 
-Symptôme : au démarrage, `enregistrement du profil SPP refusé par BlueZ: …`.
+### Ce qui est publié automatiquement
+
+BlueZ 5.x **n'enregistre aucun service tout seul** : `RegisterProfile` réussit,
+mais rien n'arrive dans la base SDP, et le pair repart avec
+`SDP - No Attributes Returned for target UUID` avant d'échouer sur le canal 1.
+Le démon fournit donc lui-même l'enregistrement SDP du profil SPP, construit à
+partir de `transport.channel` et `transport.service_name` (voir
+`SPP_SERVICE_RECORD` dans `blueco/transport.py`). Au démarrage tu dois lire :
+
+```
+enregistrement SDP SPP généré (canal RFCOMM 3)
+profil SPP enregistré (00001101-0000-1000-8000-00805f9b34fb) sur /org/bluez/hci0
+```
+
+### Si BlueZ refuse l'enregistrement
+
+Symptôme : `enregistrement du profil SPP refusé par BlueZ: …`.
 
 1. **Vérifiez d'abord** : `bluetoothctl show` doit afficher une adresse et
    `Powered: yes`. Un adaptateur éteint provoque exactement ce message.
@@ -188,7 +223,11 @@ Symptôme : au démarrage, `enregistrement du profil SPP refusé par BlueZ: …`
 | `aucun pair connecté (lancez l'appli Android)` | l'appli n'est pas démarrée ou le PC n'est pas appairé ; `blueco serve -v` doit journaliser « connexion SPP entrante de … » |
 | Le casque se reconnecte tout seul au PC après un `RELEASE` | PipeWire/wireplumber relance la connexion : coupez le profil sur cette machine (`wpctl status`, ou désactivez la reconnexion automatique du nœud) ou c'est le casque qui reprend son dernier appareil |
 | Le téléphone ne se connecte jamais au PC | appairage manquant ou non `trust`é : `bluetoothctl trust <MAC_TELEPHONE>` |
-| Rien dans le journal du démon | lancez avec `-v` (info) ou `-vv` (debug) |
+| Le téléphone se connecte « à vide » et le PC ne le voit pas | deux démons tournent : un seul peut enregistrer le profil SPP. `pgrep -af 'blueco serve'` puis n'en garder qu'un |
+| `blueco take` semble ignorer le téléphone | il n'y a plus de lien ouvert : le démon doit tourner (`systemctl --user status blueco`) et l'appli se reconnecte seule en ≤ 1 min |
+| Le PC n'arrive pas à prendre le casque (`page timeout`) | l'autre appareil les tient encore. Laisse le téléphone les libérer **avant** : `blueco take` s'en charge, et le PC réessaie plusieurs fois (délai total ≈ 20 s) |
+| Rien dans le journal du démon | il est dans `~/.local/state/blueco/daemon.log` (le service y écrit explicitement, car tout le monde ne conserve pas `journalctl --user`) ; lancez sinon avec `-v` ou `-vv` |
+| Les journaux du service systemd sont vides | `journalctl --user -u blueco.service` peut être vide si le journal utilisateur n'est pas conservé : utilisez le fichier ci-dessus |
 
 ## 9. Désinstallation
 

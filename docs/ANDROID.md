@@ -81,6 +81,28 @@ Stratégie implémentée :
    déconnectez les écouteurs depuis les réglages Bluetooth
    ```
 
+### Empêcher la reprise automatique
+
+Après un `disconnect()`, Android **reconnecte** souvent le casque de lui-même
+quelques dizaines de secondes plus tard (constaté sur le matériel :
+déconnexion à 21:26:15, reconnexion spontanée à 21:26:44). Le remède habituel est
+`setConnectionPolicy(device, CONNECTION_POLICY_FORBIDDEN)` avant de déconnecter
+— mais sur Android 16 cet appel est refusé aux applications ordinaires :
+
+```
+profil BluetoothA2dp: setConnectionPolicy() refusée
+  (Neither user … nor current process has android.permission.BLUETOOTH_PRIVILEGED.)
+```
+
+L'appli essaie quand même (et le journalise sans échouer), et la bascule
+fonctionne parce que **le PC prend les écouteurs tout de suite** : une fois le
+casque occupé par le PC, la reprise automatique du téléphone échoue. C'est
+pourquoi `blueco take` réessaie la connexion plusieurs fois et que l'appli
+attend jusqu'à 30 s la réponse du PC avant de se déclarer en échec.
+
+Reste à savoir : certains casques acceptent plusieurs appareils à la fois
+(multipoint) ; ils peuvent alors garder le téléphone connecté malgré tout.
+
 Replis possibles, dans l'ordre de préférence :
 
 | Repli | Comment |
@@ -90,7 +112,16 @@ Replis possibles, dans l'ordre de préférence :
 | Shizuku | exécute le même appel sous l'utilisateur `shell`, ce qui lève la restriction d'API masquée, sans root |
 | Root | `adb shell` / `su -c "cmd bluetooth_manager …"` ou l'API masquée complète |
 
-## 4. Réglages de l'appli
+## 4. Configuration : rien à saisir
+
+L'appli se débrouille seule (`AutoConfig.kt`) : si une adresse manque, elle la
+déduit des **appareils déjà appairés** — le PC se reconnaît à sa classe
+Bluetooth (`COMPUTER`) et à l'UUID SPP de son cache SDP, les écouteurs à leurs
+profils A2DP/HFP ou au fait qu'ils jouent le son en ce moment. Aucun scan n'est
+lancé, donc aucune autorisation de localisation n'est requise.
+
+Le script `scripts/setup-blueco.sh` pousse en plus les adresses exactes par USB
+(`adb` + `run-as` sur la variante debug), ce qui évite tout tâtonnement.
 
 | Champ | Rôle |
 | --- | --- |
@@ -98,10 +129,27 @@ Replis possibles, dans l'ordre de préférence :
 | Adresse MAC des écouteurs | cible de la bascule (bouton « Choisir les écouteurs ») |
 | Nom de ce téléphone | informationnel, visible côté PC |
 | Jeton partagé | doit être **identique** à `token` dans la config Linux |
-| Démarrer le service à l'ouverture | lance le service en avant-plan au démarrage de l'appli |
+| Relancer la liaison à l'ouverture | relance le service au démarrage de l'appli |
 
-Les réglages sont dans `SharedPreferences("blueco")` ; l'enregistrer relance le
-service pour appliquer immédiatement un changement d'adresse.
+Ces champs sont **repliés** derrière « Réglages avancés » : en usage normal, un
+seul gros bouton suffit, et il affiche toujours où sont les écouteurs (l'appli
+interroge le PC en `STATUS` toutes les 2 s pour savoir s'il les détient).
+
+Le service démarre aussi **au démarrage du téléphone** et après une mise à jour
+(`BootReceiver`), pour que la bascule déclenchée depuis le PC fonctionne même si
+l'appli n'a pas été ouverte depuis le dernier redémarrage.
+
+### Piloter l'appli depuis le PC (variante debug)
+
+La variante debug expose un récepteur qui rejoue les actions du bouton, ce qui
+permet à `scripts/setup-blueco.sh` et à `adb` de tester sans toucher l'écran :
+
+```bash
+adb shell am broadcast -a dev.blueco.app.GIVE \
+  -n dev.blueco.app.debug/dev.blueco.app.TestReceiver
+```
+
+Il n'existe **pas** dans l'APK de production (voir `src/debug/AndroidManifest.xml`).
 
 ## 5. Scénarios
 
