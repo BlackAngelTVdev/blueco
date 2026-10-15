@@ -33,6 +33,16 @@ class Prefs(context: Context) {
         get() = prefs.getString(KEY_NAME, "téléphone").orEmpty()
         set(value) = prefs.edit().putString(KEY_NAME, value.trim()).apply()
 
+    /** Nom lisible du PC (pour l'affichage ; peut être vide). */
+    var peerName: String
+        get() = prefs.getString(KEY_PEER_NAME, "").orEmpty()
+        set(value) = prefs.edit().putString(KEY_PEER_NAME, value.trim()).apply()
+
+    /** Nom lisible des écouteurs (pour l'affichage ; peut être vide). */
+    var headphonesName: String
+        get() = prefs.getString(KEY_HEADPHONES_NAME, "").orEmpty()
+        set(value) = prefs.edit().putString(KEY_HEADPHONES_NAME, value.trim()).apply()
+
     /** Démarrage automatique du service au lancement. */
     var autoStart: Boolean
         get() = prefs.getBoolean(KEY_AUTOSTART, true)
@@ -40,7 +50,9 @@ class Prefs(context: Context) {
 
     companion object {
         private const val KEY_PEER = "peer_mac"
+        private const val KEY_PEER_NAME = "peer_name"
         private const val KEY_HEADPHONES = "headphones_mac"
+        private const val KEY_HEADPHONES_NAME = "headphones_name"
         private const val KEY_TOKEN = "token"
         private const val KEY_RETRY = "retry_ms"
         private const val KEY_NAME = "device_name"

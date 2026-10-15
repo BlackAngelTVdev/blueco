@@ -30,6 +30,7 @@ class BluecoService : Service() {
         super.onCreate()
         prefs = Prefs(this)
         audio = AudioController(this)
+        current = this
         createChannel()
     }
 
@@ -47,6 +48,7 @@ class BluecoService : Service() {
         when (intent?.action) {
             ACTION_TAKE -> takeHeadphones()
             ACTION_GIVE -> giveHeadphones()
+            ACTION_STATUS -> Thread { requestRemoteStatus() }.start()
         }
         return START_STICKY
     }
@@ -54,6 +56,8 @@ class BluecoService : Service() {
     override fun onDestroy() {
         link?.stop()
         link = null
+        current = null
+        isConnected = false
         super.onDestroy()
     }
 
@@ -71,6 +75,11 @@ class BluecoService : Service() {
     }
 
     private fun startLink() {
+        // Filet de sécurité : si une adresse manque (appli réinstallée, nouveau
+        // PC), on la déduit des appareils appairés avant d'ouvrir le lien.
+        if (prefs.peerMac.isEmpty() || prefs.headphonesMac.isEmpty()) {
+            AutoConfig.ensure(this, prefs, audio)
+        }
         val current = link
         if (current != null) {
             current.peerMac = prefs.peerMac
@@ -83,7 +92,9 @@ class BluecoService : Service() {
             context = this,
             handler = ::handleRequest,
             onEvent = ::handleEvent,
-            onState = { _, message ->
+            onState = { state, message ->
+                isConnected = state == PeerLink.State.CONNECTED
+                if (!isConnected) remoteStatus = null
                 AppLog.i("lien: $message")
                 updateNotification(message)
             },
@@ -147,6 +158,28 @@ class BluecoService : Service() {
         AppLog.i("événement du PC: ${message.optString("evt")}")
     }
 
+    /**
+     * Demande au PC où sont les écouteurs : c'est ce qui permet à l'écran de
+     * n'avoir qu'un seul bouton, toujours juste. Retourne `null` si la liaison
+     * n'est pas prête (l'appelant garde le dernier état connu).
+     */
+    fun fetchRemoteStatus(): JSONObject? {
+        val current = link ?: return remoteStatus
+        if (!current.isConnected) {
+            remoteStatus = null
+            return null
+        }
+        return try {
+            val reply = current.request(Protocol.CMD_STATUS, timeoutMs = 5_000L)
+            remoteStatus = reply
+            reply
+        } catch (e: Exception) {
+            AppLog.w("état du PC indisponible: ${e.message}")
+            remoteStatus = null
+            null
+        }
+    }
+
     // ------------------------------------------------------------------ //
     // Boutons de l'appli
     // ------------------------------------------------------------------ //
@@ -157,7 +190,7 @@ class BluecoService : Service() {
             val steps = mutableListOf<String>()
             var failure: String? = null
             try {
-                val result = requireLink().request(Protocol.CMD_RELEASE, timeoutMs = 20_000L)
+                val result = requireLink().request(Protocol.CMD_RELEASE, timeoutMs = 30_000L)
                 steps.add("PC a libéré ${result.optString("released")}")
             } catch (e: Exception) {
                 failure = "le PC n'a pas pu libérer les écouteurs: ${e.message}"
@@ -183,7 +216,7 @@ class BluecoService : Service() {
             var summary: String
             try {
                 audio.release(prefs.headphonesMac)
-                val result = requireLink().request(Protocol.CMD_GRAB, timeoutMs = 20_000L)
+                val result = requireLink().request(Protocol.CMD_GRAB, timeoutMs = 30_000L)
                 summary = "PC connecté à ${result.optString("mac")}"
             } catch (e: Exception) {
                 summary = "restitution incomplète: ${e.message}"
@@ -198,11 +231,18 @@ class BluecoService : Service() {
         return link ?: throw IOException("lien Bluetooth indisponible")
     }
 
-    fun statusPayload(): JSONObject = JSONObject()
-        .put("device", prefs.deviceName)
-        .put("protocol", Protocol.VERSION)
-        .put("audio", audio.status(prefs.headphonesMac))
-        .put("peer", link?.describe() ?: "inactif")
+    fun statusPayload(): JSONObject {
+        val audioState = audio.status(prefs.headphonesMac)
+        // ``headphones_held`` est la clé que lit le démon Linux pour savoir qui
+        // détient les écouteurs : sans elle, il croit que personne ne les a et
+        // se connecte directement (ce qui échoue si le téléphone les tient).
+        return JSONObject()
+            .put("device", prefs.deviceName)
+            .put("protocol", Protocol.VERSION)
+            .put("audio", audioState)
+            .put("headphones_held", audioState.optBoolean("connected"))
+            .put("peer", link?.describe() ?: "inactif")
+    }
 
     // ------------------------------------------------------------------ //
     // Notification et publication d'état
@@ -248,12 +288,14 @@ class BluecoService : Service() {
     }
 
     private fun publish(text: String) {
+        lastState = text
         listener?.invoke(text)
     }
 
     companion object {
         const val ACTION_TAKE = "dev.blueco.app.TAKE"
         const val ACTION_GIVE = "dev.blueco.app.GIVE"
+        const val ACTION_STATUS = "dev.blueco.app.STATUS"
         const val ACTION_STOP = "dev.blueco.app.STOP"
         private const val CHANNEL_ID = "blueco-link"
         private const val NOTIFICATION_ID = 42
@@ -261,6 +303,25 @@ class BluecoService : Service() {
         /** Observateur de l'interface (même processus ; volontairement minimal). */
         @Volatile
         var listener: ((String) -> Unit)? = null
+
+        /** Dernière phrase d'état du service, lue telle quelle par l'écran. */
+        @Volatile
+        var lastState: String = ""
+
+        /** Dernier `STATUS` reçu du PC (contient `headphones_held`). */
+        @Volatile
+        var remoteStatus: JSONObject? = null
+
+        /** Vrai quand le lien RFCOMM vers le PC est établi. */
+        @Volatile
+        var isConnected: Boolean = false
+
+        /** Le service en cours d'exécution, s'il tourne (même processus). */
+        @Volatile
+        private var current: BluecoService? = null
+
+        /** Demande l'état du PC depuis l'interface, sans réveiller le service. */
+        fun requestRemoteStatus(): JSONObject? = current?.fetchRemoteStatus()
 
         fun start(context: Context) = context.startForegroundServiceOrNull(Intent(context, BluecoService::class.java))
 

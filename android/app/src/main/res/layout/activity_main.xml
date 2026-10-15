@@ -1,160 +1,158 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Un seul geste : état en grand, un gros bouton, le reste est replié. -->
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:fillViewport="true">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="16dp">
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/title_status"
-            android:textStyle="bold"
-            android:textSize="16sp" />
-
-        <TextView
-            android:id="@+id/text_status"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingTop="4dp"
-            android:paddingBottom="12dp"
-            android:text="@string/state_idle" />
+        android:padding="20dp">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal">
+            android:background="@color/blueco_card"
+            android:orientation="vertical"
+            android:padding="18dp">
 
-            <Button
-                android:id="@+id/btn_take"
-                android:layout_width="0dp"
+            <TextView
+                android:id="@+id/text_headline"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="@string/btn_take" />
+                android:text="@string/headline_unknown"
+                android:textColor="@color/blueco_ink"
+                android:textSize="22sp"
+                android:textStyle="bold" />
 
-            <Button
-                android:id="@+id/btn_give"
-                android:layout_width="0dp"
+            <TextView
+                android:id="@+id/text_detail"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="@string/btn_give" />
+                android:paddingTop="8dp"
+                android:text="@string/state_idle"
+                android:textColor="@color/blueco_muted"
+                android:textSize="14sp" />
         </LinearLayout>
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingTop="16dp"
-            android:text="@string/title_settings"
-            android:textStyle="bold"
-            android:textSize="16sp" />
-
-        <EditText
-            android:id="@+id/edit_peer"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="@string/hint_peer"
-            android:inputType="textNoSuggestions"
-            android:textSize="14sp" />
 
         <Button
-            android:id="@+id/btn_pick_peer"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/btn_pick_peer" />
-
-        <EditText
-            android:id="@+id/edit_headphones"
+            android:id="@+id/btn_switch"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:hint="@string/hint_headphones"
-            android:inputType="textNoSuggestions"
-            android:textSize="14sp" />
-
-        <Button
-            android:id="@+id/btn_pick_headphones"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/btn_pick_headphones" />
-
-        <EditText
-            android:id="@+id/edit_name"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="@string/hint_name"
-            android:inputType="text"
-            android:textSize="14sp" />
-
-        <EditText
-            android:id="@+id/edit_token"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="@string/hint_token"
-            android:inputType="textPassword"
-            android:textSize="14sp" />
-
-        <CheckBox
-            android:id="@+id/check_autostart"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/label_autostart" />
+            android:layout_marginTop="20dp"
+            android:minHeight="64dp"
+            android:text="@string/btn_switch_take"
+            android:textSize="18sp" />
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
             android:orientation="horizontal">
 
             <Button
-                android:id="@+id/btn_save"
+                android:id="@+id/btn_retry"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="@string/btn_save" />
+                android:text="@string/btn_retry" />
 
             <Button
-                android:id="@+id/btn_refresh"
+                android:id="@+id/btn_advanced"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="@string/btn_refresh" />
+                android:text="@string/btn_advanced" />
         </LinearLayout>
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal">
-
-            <Button
-                android:id="@+id/btn_start"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="@string/btn_start" />
-
-            <Button
-                android:id="@+id/btn_stop"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="@string/btn_stop" />
-        </LinearLayout>
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingTop="16dp"
-            android:text="@string/title_log"
-            android:textStyle="bold"
-            android:textSize="16sp" />
 
         <TextView
             android:id="@+id/text_log"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:fontFamily="monospace"
-            android:textSize="11sp" />
+            android:paddingTop="12dp"
+            android:textSize="11sp"
+            android:textColor="@color/blueco_muted" />
+
+        <LinearLayout
+            android:id="@+id/group_advanced"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="20dp"
+                android:text="@string/title_advanced"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="4dp"
+                android:text="@string/help_advanced"
+                android:textSize="12sp"
+                android:textColor="@color/blueco_muted" />
+
+            <EditText
+                android:id="@+id/edit_peer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="@string/hint_peer"
+                android:inputType="textNoSuggestions"
+                android:textSize="14sp" />
+
+            <Button
+                android:id="@+id/btn_pick_peer"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/btn_pick_peer" />
+
+            <EditText
+                android:id="@+id/edit_headphones"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="@string/hint_headphones"
+                android:inputType="textNoSuggestions"
+                android:textSize="14sp" />
+
+            <Button
+                android:id="@+id/btn_pick_headphones"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/btn_pick_headphones" />
+
+            <EditText
+                android:id="@+id/edit_name"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="@string/hint_name"
+                android:inputType="text"
+                android:textSize="14sp" />
+
+            <EditText
+                android:id="@+id/edit_token"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="@string/hint_token"
+                android:inputType="textPassword"
+                android:textSize="14sp" />
+
+            <CheckBox
+                android:id="@+id/check_autostart"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/label_autostart" />
+
+            <Button
+                android:id="@+id/btn_save"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/btn_save" />
+        </LinearLayout>
     </LinearLayout>
 </ScrollView>

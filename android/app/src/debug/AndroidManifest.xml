@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Surcharge réservée à la variante debug : elle n'est jamais fusionnée dans
+  l'APK de production. Le récepteur de test permet à scripts/setup-blueco.sh de
+  déclencher et de vérifier la bascule depuis le PC, en USB.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <receiver
+            android:name=".TestReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="dev.blueco.app.TAKE" />
+                <action android:name="dev.blueco.app.GIVE" />
+                <action android:name="dev.blueco.app.STATUS" />
+                <action android:name="dev.blueco.app.STOP" />
+                <action android:name="dev.blueco.app.START" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

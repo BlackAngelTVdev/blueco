@@ -31,6 +31,19 @@ class AudioController(private val context: Context) {
 
     private enum class Change { CONNECT, DISCONNECT }
 
+    /**
+     * Valeurs des politiques de connexion masquées (`BluetoothProfile`).
+     *
+     * Sans elles, la déconnexion ne suffit pas : Android reconnecte
+     * automatiquement le casque quelques dizaines de secondes plus tard
+     * (observé : déconnexion à 21:26:15, reconnexion spontanée à 21:26:44),
+     * donc le PC ne peut jamais s'en emparer.
+     */
+    private object Policy {
+        const val ALLOWED = 100
+        const val FORBIDDEN = 0
+    }
+
     fun status(mac: String): JSONObject {
         val label = deviceName(mac)
         val connected = connectedAudioDevices()
@@ -43,20 +56,33 @@ class AudioController(private val context: Context) {
             .put("backend", "android")
     }
 
-    /** Déconnecte les écouteurs de ce téléphone : ils deviennent libres. */
+    /**
+     * Libère les écouteurs : on **interdit** d'abord la reconnexion, puis on
+     * déconnecte. Sans l'interdiction, Android les reprend seul et le pair
+     * n'arrive jamais à s'y connecter.
+     */
     fun release(mac: String): JSONObject {
         val device = device(mac)
         val wasConnected = isConnected(device)
+
+        val policyLocked = forbid(device)
         if (!wasConnected) {
             return JSONObject()
                 .put("released", mac)
                 .put("name", safeName(device))
                 .put("was_connected", false)
                 .put("connected", false)
+                .put("reconnect_blocked", policyLocked)
                 .put("already_free", true)
         }
-        val done = change(BluetoothProfile.A2DP, device, Change.DISCONNECT) or
+
+        var done = change(BluetoothProfile.A2DP, device, Change.DISCONNECT) or
             change(BluetoothProfile.HEADSET, device, Change.DISCONNECT)
+        // La déconnexion est asynchrone : on vérifie qu'elle a bien tenu.
+        if (done && stillConnected(device)) {
+            change(BluetoothProfile.A2DP, device, Change.DISCONNECT)
+            done = done or !stillConnected(device)
+        }
         if (!done) {
             throw IOException(
                 "Android a refusé la déconnexion de $mac (API masquée bloquée sur cette version) : " +
@@ -68,15 +94,23 @@ class AudioController(private val context: Context) {
             .put("name", safeName(device))
             .put("was_connected", true)
             .put("connected", false)
+            .put("reconnect_blocked", policyLocked)
             .put("already_free", false)
     }
 
-    /** Reconnecte les écouteurs à ce téléphone. */
+    /**
+     * Reprend les écouteurs : on réautorise la reconnexion (sinon Android
+     * refuserait de les reprendre), puis on se connecte.
+     */
     fun grab(mac: String): JSONObject {
         val device = device(mac)
-        val already = isConnected(device)
-        if (already) {
-            return JSONObject().put("connected", true).put("mac", mac).put("already_connected", true)
+        val allowed = allow(device)
+        if (isConnected(device)) {
+            return JSONObject()
+                .put("connected", true)
+                .put("mac", mac)
+                .put("reconnect_allowed", allowed)
+                .put("already_connected", true)
         }
         val done = change(BluetoothProfile.A2DP, device, Change.CONNECT)
         if (!done) {
@@ -85,7 +119,33 @@ class AudioController(private val context: Context) {
                     "ouvrez les réglages Bluetooth et touchez les écouteurs"
             )
         }
-        return JSONObject().put("connected", true).put("mac", mac).put("already_connected", false)
+        return JSONObject()
+            .put("connected", true)
+            .put("mac", mac)
+            .put("reconnect_allowed", allowed)
+            .put("already_connected", false)
+    }
+
+    /** Bloque la reconnexion automatique de l'appareil (A2DP + casque). */
+    private fun forbid(device: BluetoothDevice): Boolean =
+        setPolicy(BluetoothProfile.A2DP, device, Policy.FORBIDDEN) or
+            setPolicy(BluetoothProfile.HEADSET, device, Policy.FORBIDDEN)
+
+    /** Rétablit la reconnexion automatique (état par défaut d'Android). */
+    private fun allow(device: BluetoothDevice): Boolean =
+        setPolicy(BluetoothProfile.A2DP, device, Policy.ALLOWED) or
+            setPolicy(BluetoothProfile.HEADSET, device, Policy.ALLOWED)
+
+    private fun stillConnected(device: BluetoothDevice): Boolean {
+        repeat(10) {
+            if (!isConnected(device)) return false
+            try {
+                Thread.sleep(200L)
+            } catch (_: InterruptedException) {
+                return isConnected(device)
+            }
+        }
+        return isConnected(device)
     }
 
     fun connectedAudioDevices(): List<BluetoothDevice> {
@@ -135,6 +195,33 @@ class AudioController(private val context: Context) {
     private fun change(profile: Int, device: BluetoothDevice, action: Change): Boolean {
         val method = if (action == Change.CONNECT) "connect" else "disconnect"
         val outcome = withProfile(profile) { proxy -> invokeHidden(proxy, method, device) }
+        return outcome == true
+    }
+
+    /** `setConnectionPolicy(device, policy)` : masqué, donc par réflexion. */
+    private fun setPolicy(profile: Int, device: BluetoothDevice, policy: Int): Boolean {
+        val outcome = withProfile(profile) { proxy ->
+            try {
+                val callable = proxy.javaClass.getMethod(
+                    "setConnectionPolicy",
+                    BluetoothDevice::class.java,
+                    Int::class.javaPrimitiveType,
+                )
+                (callable.invoke(proxy, device, policy) as? Boolean) ?: false
+            } catch (e: NoSuchMethodException) {
+                AppLog.w("profil ${proxy.javaClass.simpleName}: setConnectionPolicy() absente")
+                false
+            } catch (e: IllegalAccessException) {
+                AppLog.w("profil ${proxy.javaClass.simpleName}: setConnectionPolicy() bloquée par la plateforme")
+                false
+            } catch (e: InvocationTargetException) {
+                AppLog.w(
+                    "profil ${proxy.javaClass.simpleName}: setConnectionPolicy() refusée " +
+                        "(${e.targetException?.message})"
+                )
+                false
+            }
+        }
         return outcome == true
     }
 

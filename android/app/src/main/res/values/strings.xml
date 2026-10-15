@@ -1,16 +1,39 @@
-<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">blueco</string>
     <string name="channel_name">Liaison Bluetooth</string>
     <string name="channel_description">Maintient la connexion avec le PC pour basculer les écouteurs.</string>
 
-    <string name="state_idle">blueco en veille</string>
+    <string name="state_idle">Démarrage…</string>
 
     <string name="action_take">Prendre les écouteurs</string>
     <string name="action_give">Rendre les écouteurs</string>
 
-    <string name="title_status">État</string>
-    <string name="title_settings">Réglages</string>
+    <!-- État, en grand -->
+    <string name="headline_here">🎧 %1$s\nsur ce téléphone</string>
+    <string name="headline_pc">🎧 Écouteurs sur le PC</string>
+    <string name="headline_unknown">🎧 Écouteurs ailleurs</string>
+
+    <string name="link_ok">PC %1$s : connecté</string>
+    <string name="link_search">PC %1$s : recherche… (%2$s)</string>
+    <string name="link_nopeer">aucun PC trouvé : appaire-le d\'abord</string>
+    <string name="hp_here">écouteurs : sur ce téléphone</string>
+    <string name="hp_on_pc">écouteurs : sur le PC</string>
+    <string name="hp_elsewhere">écouteurs : ni ici ni sur le PC</string>
+    <string name="hp_none">écouteurs : introuvables</string>
+
+    <!-- Le geste unique -->
+    <string name="btn_switch_take">Prendre les écouteurs sur le PC</string>
+    <string name="btn_switch_give">Rendre les écouteurs au PC</string>
+    <string name="btn_retry">Relancer la liaison</string>
+    <string name="btn_advanced">Réglages avancés</string>
+
+    <string name="working_take">Bascule en cours : le PC va lâcher les écouteurs…</string>
+    <string name="working_give">Bascule en cours : le PC va reprendre les écouteurs…</string>
+    <string name="relinking">Liaison relancée…</string>
+
+    <!-- Réglages avancés (repliés) -->
+    <string name="title_advanced">Réglages avancés</string>
+    <string name="help_advanced">En principe inutile : le PC et les écouteurs sont détectés tout seuls. Ces champs ne servent que si la détection se trompe.</string>
     <string name="title_log">Journal</string>
 
     <string name="hint_peer">Adresse MAC du PC (ex. 11:22:33:44:55:66)</string>
@@ -18,17 +41,13 @@
     <string name="hint_token">Jeton partagé (optionnel)</string>
     <string name="hint_name">Nom de ce téléphone</string>
 
-    <string name="label_autostart">Démarrer le service à l\'ouverture</string>
+    <string name="label_autostart">Relancer la liaison à l\'ouverture</string>
     <string name="btn_save">Enregistrer</string>
-    <string name="btn_start">Démarrer le service</string>
-    <string name="btn_stop">Arrêter le service</string>
-    <string name="btn_take">Prendre les écouteurs</string>
-    <string name="btn_give">Rendre les écouteurs</string>
-    <string name="btn_refresh">Rafraîchir l\'état</string>
     <string name="btn_pick_peer">Choisir le PC dans la liste</string>
     <string name="btn_pick_headphones">Choisir les écouteurs dans la liste</string>
 
     <string name="saved">Réglages enregistrés</string>
     <string name="needs_permission">Autorisation Bluetooth nécessaire pour continuer.</string>
+    <string name="no_paired">Aucun appareil appairé : appaire le PC dans les réglages Bluetooth.</string>
     <string name="paired_devices">Appareils appairés</string>
 </resources>
