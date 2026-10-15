@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "blueco"
+version = "0.1.0"
+description = "Bluetooth-only headphone handoff between Linux and Android (RFCOMM/SPP + BlueZ)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+# dbus-python -> pilotage de BlueZ (connect/disconnect du casque, Profile1)
+# PyGObject   -> boucle GLib qui sert les appels D-Bus entrants du profil SPP
+dependencies = [
+    "dbus-python>=1.3.2",
+    "PyGObject>=3.42",
+]
+
+[project.optional-dependencies]
+dev = []
+
+[project.scripts]
+blueco = "blueco.cli:main"
+
+[tool.setuptools]
+packages = ["blueco"]
+
+[tool.setuptools.package-data]
+blueco = ["../packaging/*"]

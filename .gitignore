@@ -1,0 +1,89 @@
+# ---------------------------------------------------------------------------
+# blueco — fichiers ignorés
+# ---------------------------------------------------------------------------
+
+# --- Python -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+.venv/
+venv/
+ENV/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# --- Configuration locale (adresses MAC, jeton) -----------------------------
+# La configuration réelle vit dans ~/.config/blueco/config.json : gardez-la hors
+# du dépôt. Seuls packaging/config.example.json et les modèles sont versionnés.
+config.json
+config.local.json
+blueco.local.json
+*.token
+.env
+.env.*
+!.env.example
+secrets.json
+
+# --- Android / Gradle -------------------------------------------------------
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+.gradle/
+captures/
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+output-metadata.json
+proguard/mapping.txt
+release/
+keystore.properties
+
+# --- Clés de signature : ne jamais versionner -------------------------------
+*.jks
+*.keystore
+!debug.keystore
+
+# --- Éditeurs et IDE --------------------------------------------------------
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.kate-swp
+
+# --- Système -----------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+*.lnk
+
+# --- Divers -----------------------------------------------------------------
+*.log
+logs/
+tmp/
+.cache/
+*~
