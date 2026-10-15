@@ -45,6 +45,22 @@ class StubClient:
         return {"address": "11:22:33:44:55:66", "name": "hci0", "powered": True}
 
 
+class FlakyClient(StubClient):
+    """Client qui refuse les premiers `connect()` (comme un page timeout)."""
+
+    def __init__(self, failures: int = 1) -> None:
+        super().__init__(connected=False)
+        self.failures = failures
+
+    def connect(self, address: str) -> DeviceInfo:
+        self.calls.append(("connect", address))
+        if self.failures > 0:
+            self.failures -= 1
+            raise BluezError(f"connexion à {address} refusée: br-connection-page-timeout")
+        self.device = replace(self.device, connected=True)
+        return self.device
+
+
 class FakeSinkTests(unittest.TestCase):
     def test_release_then_grab(self) -> None:
         sink = FakeAudioSink()
@@ -93,6 +109,26 @@ class BluezSinkTests(unittest.TestCase):
         self.assertTrue(result["connected"])
         self.assertFalse(result["already_connected"])
         self.assertEqual(client.calls, [("connect", "AA:BB:CC:DD:EE:FF")])
+
+    def test_grab_retries_until_the_headset_answers(self) -> None:
+        # Un « page timeout » est fréquent juste après que l'autre appareil a
+        # lâché le casque : le PC doit réessayer au lieu d'échouer tout de suite.
+        client = FlakyClient(failures=2)
+        sink = BluezAudioSink(client, mac="AA:BB:CC:DD:EE:FF",
+                              grab_attempts=3, grab_deadline=5.0)
+        result = sink.grab()
+        self.assertTrue(result["connected"])
+        self.assertEqual(result["attempts"], 3)
+        self.assertEqual(len(client.calls), 3)
+
+    def test_grab_gives_up_after_the_last_attempt(self) -> None:
+        client = FlakyClient(failures=99)
+        sink = BluezAudioSink(client, mac="AA:BB:CC:DD:EE:FF",
+                              grab_attempts=3, grab_deadline=5.0)
+        with self.assertRaises(AudioError) as ctx:
+            sink.grab()
+        self.assertEqual(ctx.exception.code, proto.E_AUDIO_UNAVAILABLE)
+        self.assertEqual(len(client.calls), 3)
 
     def test_missing_device_raises_no_device(self) -> None:
         sink = BluezAudioSink(StubClient(missing=True), name="Introuvable")

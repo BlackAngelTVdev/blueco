@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 from blueco import config as cfgmod
-from blueco.config import Config, ConfigError
+from blueco.config import Config, ConfigError, PeerConfig
 
 
 class ConfigTests(unittest.TestCase):
@@ -26,7 +26,7 @@ class ConfigTests(unittest.TestCase):
         cfg.device_name = "bureau"
         cfg.token = "s3cret"
         cfg.headphones.mac = "AA:BB:CC:DD:EE:FF"
-        cfg.peer.mac = "11:22:33:44:55:66"
+        cfg.peers = [PeerConfig(name="téléphone", mac="11:22:33:44:55:66")]
         cfg.transport.mode = cfgmod.TRANSPORT_RFCOMM
         cfg.transport.channel = 7
         restored = Config.from_dict(json.loads(json.dumps(cfg.to_dict())))
@@ -54,7 +54,7 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(example.exists(), f"{example} manquant")
         cfg = Config.load(example)
         self.assertTrue(cfg.headphones.is_set())
-        self.assertTrue(cfg.peer.is_set())
+        self.assertEqual([p.label() for p in cfg.peers], ["pc2", "téléphone"])
         cfg.validate()
 
     def test_missing_file_gives_defaults(self) -> None:
@@ -100,6 +100,100 @@ class ConfigTests(unittest.TestCase):
                 del os.environ["XDG_CONFIG_HOME"]
             else:
                 os.environ["XDG_CONFIG_HOME"] = previous
+
+
+class PeerTests(unittest.TestCase):
+    """Configuration multi-appareils : c'est ce qui permet PC1 → PC2 → téléphone."""
+
+    def test_peers_list(self) -> None:
+        cfg = Config.from_dict({
+            "peers": [
+                {"name": "bureau", "mac": "11:22:33:44:55:66"},
+                {"name": "téléphone", "channel": 5},
+            ]
+        })
+        self.assertEqual([p.label() for p in cfg.peers], ["bureau", "téléphone"])
+        self.assertEqual(cfg.peers[1].channel, 5)
+        self.assertEqual(cfg.peers[1].mode, "")
+
+    def test_legacy_single_peer_is_accepted(self) -> None:
+        cfg = Config.from_dict({"peer": {"mac": "11:22:33:44:55:66"}})
+        self.assertEqual(len(cfg.peers), 1)
+        self.assertEqual(cfg.primary_peer().mac, "11:22:33:44:55:66")
+
+    def test_peer_and_peers_cannot_coexist(self) -> None:
+        with self.assertRaises(ConfigError):
+            Config.from_dict({"peer": {"mac": "11:22:33:44:55:66"},
+                              "peers": [{"name": "bureau"}]})
+
+    def test_peer_unknown_key(self) -> None:
+        with self.assertRaises(ConfigError):
+            Config.from_dict({"peers": [{"name": "bureau", "wifi": True}]})
+
+    def test_peer_without_target(self) -> None:
+        with self.assertRaises(ConfigError):
+            Config.from_dict({"peers": [{"channel": 3}]})
+
+    def test_duplicate_peer_name(self) -> None:
+        with self.assertRaises(ConfigError):
+            Config.from_dict({"peers": [{"name": "a"}, {"name": "a"}]})
+
+    def test_invalid_mac_is_refused(self) -> None:
+        with self.assertRaises(ConfigError):
+            Config.from_dict({"peers": [{"name": "bureau", "mac": "aa-bb-cc"}]})
+
+    def test_invalid_peer_mode(self) -> None:
+        with self.assertRaises(ConfigError):
+            Config.from_dict({"peers": [{"name": "bureau", "mode": "carrier-pigeon"}]})
+
+    def test_peers_are_not_a_list(self) -> None:
+        with self.assertRaises(ConfigError):
+            Config.from_dict({"peers": {"name": "bureau"}})
+
+    def test_require_peer_resolves_unique_or_named(self) -> None:
+        cfg = Config.from_dict({"peers": [{"name": "bureau"}, {"name": "téléphone"}]})
+        self.assertEqual(cfg.require_peer("téléphone").name, "téléphone")
+        self.assertEqual(cfg.require_peer("tél").name, "téléphone", "préfixe non ambigu")
+        with self.assertRaises(ConfigError):
+            cfg.require_peer()
+        with self.assertRaises(ConfigError):
+            cfg.require_peer("inconnu")
+        self.assertIsNone(cfg.primary_peer(), "deux pairs = pas de pair « unique »")
+
+    def test_for_peer_overrides_target(self) -> None:
+        cfg = Config()
+        cfg.token = "global"
+        cfg.transport.mode = cfgmod.TRANSPORT_PROFILE1
+        peer = PeerConfig(name="bureau", mac="11:22:33:44:55:66", mode=cfgmod.TRANSPORT_RFCOMM,
+                          channel=7, token="local")
+        clone = cfg.for_peer(peer)
+        self.assertEqual(clone.peers, [peer])
+        self.assertEqual(clone.primary_peer(), peer)
+        self.assertEqual(clone.transport.mode, cfgmod.TRANSPORT_RFCOMM)
+        self.assertEqual(clone.transport.channel, 7)
+        self.assertEqual(clone.token, "local")
+        self.assertEqual(cfg.peers, [], "la configuration d'origine ne doit pas être modifiée")
+
+    def test_add_and_remove_peer(self) -> None:
+        cfg = Config()
+        cfg.add_peer(PeerConfig(name="bureau", mac="11:22:33:44:55:66"))
+        cfg.add_peer(PeerConfig(name="bureau", mac="AA:BB:CC:DD:EE:FF"))
+        self.assertEqual(len(cfg.peers), 1, "même étiquette = remplacement")
+        self.assertEqual(cfg.peers[0].mac, "AA:BB:CC:DD:EE:FF")
+        self.assertTrue(cfg.remove_peer("BUREAU"))
+        self.assertFalse(cfg.remove_peer("bureau"))
+        self.assertEqual(cfg.peers, [])
+
+    def test_peers_roundtrip_through_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.json"
+            cfg = Config()
+            cfg.peers = [PeerConfig(name="bureau", mac="11:22:33:44:55:66"),
+                         PeerConfig(name="téléphone")]
+            cfg.device_name = "pc1"
+            cfg.save(path)
+            loaded = Config.load(path)
+        self.assertEqual(loaded, cfg, "la liste de pairs doit survivre à un aller-retour disque")
 
 
 if __name__ == "__main__":
