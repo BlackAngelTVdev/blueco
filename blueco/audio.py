@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -50,12 +51,27 @@ class AudioSink(ABC):
 
 
 class BluezAudioSink(AudioSink):
+    """Opérations réelles sur le casque via BlueZ.
+
+    La reprise de connexion (``grab``) est retentée : juste après que l'autre
+    appareil a lâché le casque, BlueZ échoue souvent en ``page timeout`` le
+    temps que l'appareil redevienne joignable (constaté sur le matériel).
+    """
+
     label = "bluez"
 
-    def __init__(self, client: Any, mac: str = "", name: str = "") -> None:
+    #: Nombre d'essais et budget total de la reprise, en secondes.
+    GRAB_ATTEMPTS = 3
+    GRAB_DEADLINE_S = 20.0
+
+    def __init__(self, client: Any, mac: str = "", name: str = "", *,
+                 grab_attempts: int | None = None,
+                 grab_deadline: float | None = None) -> None:
         self._client = client
         self._mac = mac
         self._name = name
+        self._grab_attempts = max(1, grab_attempts or self.GRAB_ATTEMPTS)
+        self._grab_deadline = grab_deadline if grab_deadline is not None else self.GRAB_DEADLINE_S
 
     def _lookup(self) -> Any | None:
         try:
@@ -114,11 +130,21 @@ class BluezAudioSink(AudioSink):
             )
         if device.connected:
             return {"connected": True, "mac": device.address, "already_connected": True}
-        try:
-            self._client.connect(device.address)
-        except BluezError as exc:
-            raise AudioError(proto.E_AUDIO_UNAVAILABLE, str(exc)) from exc
-        return {"connected": True, "mac": device.address, "already_connected": False}
+        started = time.monotonic()
+        last: BluezError | None = None
+        for attempt in range(1, self._grab_attempts + 1):
+            try:
+                self._client.connect(device.address)
+                return {"connected": True, "mac": device.address, "already_connected": False,
+                        "attempts": attempt}
+            except BluezError as exc:
+                last = exc
+                left = self._grab_deadline - (time.monotonic() - started)
+                if attempt >= self._grab_attempts or left <= 1.0:
+                    break
+                log.info("le casque n'est pas encore joignable (%s) — nouvel essai", exc)
+                time.sleep(min(1.0, left))
+        raise AudioError(proto.E_AUDIO_UNAVAILABLE, str(last)) from last
 
     def adapter_info(self) -> dict[str, Any]:
         try:

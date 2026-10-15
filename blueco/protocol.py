@@ -35,7 +35,18 @@ CMD_RELEASE = "RELEASE"
 CMD_GRAB = "GRAB"
 CMD_WHOAMI = "WHOAMI"
 
-COMMANDS = frozenset({CMD_PING, CMD_STATUS, CMD_RELEASE, CMD_GRAB, CMD_WHOAMI})
+# Commandes de *pilotage local* : elles ne sont acceptées que sur le canal de
+# contrôle (socket unix du démon), jamais sur une connexion Bluetooth entrante.
+# C'est ce qui permet à `blueco take` (processus séparé du démon) d'utiliser le
+# lien que le téléphone a ouvert — le démon est le seul à le voir.
+CMD_TAKE = "TAKE"
+CMD_GIVE = "GIVE"
+
+COMMANDS = frozenset({CMD_PING, CMD_STATUS, CMD_RELEASE, CMD_GRAB, CMD_WHOAMI,
+                      CMD_TAKE, CMD_GIVE})
+
+#: Commandes qu'un pair distant peut nous adresser (les autres sont locales).
+PEER_COMMANDS = frozenset({CMD_PING, CMD_STATUS, CMD_RELEASE, CMD_GRAB, CMD_WHOAMI})
 
 #: Commandes qu'un pair est autorisé à nous demander.
 INBOUND_COMMANDS = COMMANDS
@@ -51,6 +62,7 @@ E_UNAUTHORIZED = "UNAUTHORIZED"
 E_NO_DEVICE = "NO_DEVICE"
 E_AUDIO_UNAVAILABLE = "AUDIO_UNAVAILABLE"
 E_NOT_CONNECTED = "NOT_CONNECTED"
+E_CONFIG = "CONFIG_ERROR"
 E_TIMEOUT = "TIMEOUT"
 E_BUSY = "BUSY"
 E_INTERNAL = "INTERNAL"

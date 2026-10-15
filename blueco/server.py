@@ -20,7 +20,7 @@ from typing import Any, Callable
 
 from . import protocol as proto
 from .audio import AudioError, AudioSink
-from .config import Config
+from .config import Config, ConfigError
 from .session import Session
 from .transport import Connection, Listener, TransportError, create_listener
 
@@ -49,6 +49,7 @@ class BluecoServer:
         self._queue: deque[dict] = deque()
         self._history: deque[dict] = deque(maxlen=20)
         self.error: str = ""
+        self._switchboard: Any = None
 
     # ------------------------------------------------------------------ #
     # État
@@ -96,6 +97,37 @@ class BluecoServer:
         self.broadcast_state()
         return result
 
+    def sessions(self) -> list[Session]:
+        with self._lock:
+            return [session for session in self._sessions if session.alive]
+
+    def session_for(self, peer: Any) -> Session | None:
+        """La session ouverte par ce pair (l'appareil qui a pris le lien), s'il y en a une."""
+        mac = getattr(peer, "mac", "") or ""
+        for candidate in (getattr(peer, "label", lambda: "")(), getattr(peer, "name", ""),
+                          getattr(peer, "bluetooth_name", "")):
+            for session in self.sessions():
+                if session.matches(label=candidate, mac=mac):
+                    return session
+        return None
+
+    def switchboard(self) -> Any:
+        """Coordinateur multi-pairs, construit à la demande (résolution des noms incluse)."""
+        if self._switchboard is None:
+            from .switch import Switchboard
+
+            resolver = None
+            try:
+                from . import bluez
+
+                client = bluez.open_client("auto")
+                resolver = lambda peer: bluez.resolve_peer_mac(peer, client)  # noqa: E731
+            except Exception as exc:  # BlueZ absent : on se rabattra sur les adresses figées
+                self.log.info("résolution des noms de pairs indisponible: %s", exc)
+            self._switchboard = Switchboard(self.config, self.sink, resolver=resolver,
+                                            server=self, logger=self.log)
+        return self._switchboard
+
     def broadcast_state(self) -> None:
         payload = self.status_payload()
         for session in list(self._sessions):
@@ -111,8 +143,13 @@ class BluecoServer:
         provided = message.get("token") or ""
         return hmac.compare_digest(str(provided), expected)
 
-    def dispatch(self, message: dict) -> dict:
-        """Traite une requête entrante et renvoie la trame de réponse."""
+    def dispatch(self, message: dict, control: bool = False) -> dict:
+        """Traite une requête entrante et renvoie la trame de réponse.
+
+        ``control=True`` uniquement pour le canal local (socket unix) : c'est le
+        seul endroit où ``TAKE``/``GIVE`` sont acceptés, car eux seuls ont accès
+        aux sessions ouvertes par les pairs.
+        """
         request_id = str(message.get("id", ""))
         command = str(message.get("cmd", "")).upper()
         args = message.get("args") or {}
@@ -121,9 +158,24 @@ class BluecoServer:
         if not self._authorized(message):
             self.log.warning("requête %s refusée: jeton invalide", command)
             return proto.failure(request_id, proto.E_UNAUTHORIZED, "jeton invalide")
+        if not control and command not in proto.PEER_COMMANDS:
+            self.log.warning("commande locale %s refusée sur une connexion distante", command)
+            return proto.failure(
+                request_id, proto.E_UNSUPPORTED,
+                f"{command} n'est acceptée que sur le canal de contrôle local",
+            )
 
-        self.log.info("requête reçue: %s %s", command, args if args else "")
+        self.log.info("requête reçue%s: %s %s", " (locale)" if control else "", command,
+                      args if args else "")
         try:
+            if command == proto.CMD_TAKE:
+                result = self.switchboard().take(source=args.get("from") or None,
+                                                 skip_release=bool(args.get("skip_release")))
+                return proto.ok(request_id, **result)
+            if command == proto.CMD_GIVE:
+                result = self.switchboard().give(target=args.get("to") or None,
+                                                 skip_grab=bool(args.get("skip_grab")))
+                return proto.ok(request_id, **result)
             if command == proto.CMD_PING:
                 return proto.ok(request_id, pong=True, device=self.config.device_name,
                                 protocol=proto.PROTOCOL_VERSION)
@@ -145,16 +197,19 @@ class BluecoServer:
         except AudioError as exc:
             self._record({"event": "error", "cmd": command, "code": exc.code, "message": exc.message})
             return proto.failure(request_id, exc.code, exc.message)
+        except ConfigError as exc:
+            # configuration incomplète : erreur attendue, pas un plantage
+            return proto.failure(request_id, proto.E_CONFIG, str(exc))
         except Exception as exc:  # pragma: no cover - filet de sécurité
             self.log.exception("échec de %s", command)
             return proto.failure(request_id, proto.E_INTERNAL, str(exc))
 
-    def handle(self, conn: Connection) -> None:
+    def handle(self, conn: Connection, control: bool = False) -> None:
         session = Session(
             conn,
-            on_request=self.dispatch,
+            on_request=lambda message, flag=control: self.dispatch(message, control=flag),
             on_event=self._on_peer_event,
-            name="android",
+            name="control" if control else "peer",
             logger=self.log,
         ).start()
         with self._lock:

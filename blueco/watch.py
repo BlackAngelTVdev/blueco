@@ -106,7 +106,10 @@ class PresenceWatcher:
         except Exception as exc:  # TimeoutError, TransportError, RemoteError
             log.debug("pair injoignable: %s", exc)
 
-        rssi = read_rssi(self.config.peer.mac) if self.rssi_threshold is not None else None
+        peer = self.config.primary_peer()
+        rssi = (read_rssi(peer.mac)
+                if self.rssi_threshold is not None and peer is not None and peer.mac
+                else None)
         outcome["rssi"] = rssi
 
         if reachable and self.rssi_threshold is not None and rssi is not None:

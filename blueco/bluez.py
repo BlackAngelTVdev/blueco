@@ -322,3 +322,30 @@ def open_client(prefer: str = "auto") -> Any:
 
 def connected_devices(devices: Iterable[DeviceInfo]) -> list[DeviceInfo]:
     return [d for d in devices if d.connected]
+
+
+def resolve_peer_mac(peer: Any, client: Any) -> str:
+    """Adresse MAC d'un pair configuré, par son adresse ou en interrogeant BlueZ.
+
+    Les pair sont désignés par un nom lisible dans la configuration : on retrouve
+    l'adresse parmi les appareils que BlueZ connaît (donc appairés ou déjà vus).
+    """
+    mac = getattr(peer, "mac", "") or ""
+    if mac:
+        if not is_mac(mac):
+            raise BluezError(f"adresse MAC invalide dans la configuration: {mac!r}")
+        return normalize_mac(mac)
+    label = getattr(peer, "label", lambda: "?")()
+    candidates = [c for c in (getattr(peer, "bluetooth_name", ""), getattr(peer, "name", "")) if c]
+    if not candidates:
+        raise BluezError(f"pair sans nom ni adresse: impossible de le résoudre ({label})")
+    last: BluezError | None = None
+    for candidate in candidates:
+        try:
+            return client.find_device(name=candidate).address
+        except BluezError as exc:
+            last = exc
+    raise BluezError(
+        f"impossible de résoudre « {label} » via BlueZ ({last}). "
+        "Appairez l'appareil, précisez peers[].bluetooth_name, ou figez peers[].mac."
+    )

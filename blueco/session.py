@@ -45,6 +45,8 @@ class Session:
         self.log = logger or log
         self._on_request = on_request
         self._on_event = on_event
+        #: informations apprises sur le pair (nom annoncé dans HELLO, adresse…)
+        self.metadata: dict[str, Any] = {}
         self._pending: dict[str, _Pending] = {}
         self._lock = threading.RLock()
         self._send_lock = threading.Lock()
@@ -161,6 +163,7 @@ class Session:
             pending.event.set()
             return
         if "evt" in message:
+            self._learn(message)
             if self._on_event is not None:
                 try:
                     self._on_event(message)
@@ -182,6 +185,40 @@ class Session:
             self.log.exception("gestion de %s en échec", message.get("cmd"))
             reply = proto.failure(str(message.get("id", "")), proto.E_INTERNAL, str(exc))
         self.send_reply(reply)
+
+    def _learn(self, message: dict) -> None:
+        """Retient ce que le pair annonce de lui (``HELLO``) pour pouvoir le cibler."""
+        if message.get("evt") != proto.EVT_HELLO:
+            return
+        data = message.get("data")
+        if isinstance(data, dict):
+            device = data.get("device")
+            if isinstance(device, str) and device:
+                self.metadata["device"] = device
+            mac = data.get("mac")
+            if isinstance(mac, str) and mac:
+                self.metadata["mac"] = mac.upper()
+
+    @property
+    def address(self) -> str:
+        """Adresse du pair, soit annoncée, soit déduite du socket."""
+        announced = self.metadata.get("mac")
+        if announced:
+            return str(announced)
+        candidate = str(getattr(self.conn, "peer", "") or "")
+        parts = candidate.split(":")
+        if len(parts) == 7 and all(len(part) == 2 for part in parts):
+            return ":".join(parts[:6])  # « AA:BB:..:FF:canal » → l'adresse seule
+        return candidate
+
+    def matches(self, label: str = "", mac: str = "") -> bool:
+        """Ce pair est-il celui décrit par ``label``/``mac`` ?"""
+        if mac and self.address.upper() == mac.upper():
+            return True
+        announced = str(self.metadata.get("device", ""))
+        if not label or not announced:
+            return False
+        return announced.strip().lower() == label.strip().lower()
 
     def send_reply(self, reply: dict) -> None:
         try:

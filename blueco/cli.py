@@ -22,10 +22,12 @@ from typing import Any, Sequence
 from . import __version__, bluez, protocol as proto
 from .audio import AudioError, AudioSink, FakeAudioSink, create_sink
 from .client import BluecoClient
+from .control import ControlServer, ControlUnavailable, call_control
 from .config import (
     AUDIO_FAKE,
     Config,
     ConfigError,
+    PeerConfig,
     default_config_path,
 )
 from .server import BluecoServer
@@ -65,7 +67,9 @@ def _load_config(args: argparse.Namespace) -> Config:
     if getattr(args, "fake", False):
         cfg.audio_backend = AUDIO_FAKE
     if getattr(args, "peer_mac", None):
-        cfg.peer.mac = args.peer_mac
+        # cible unique imposée par la ligne de commande
+        cfg.peers = [PeerConfig(name=getattr(args, "peer_name", "") or "",
+                                mac=args.peer_mac, channel=cfg.transport.channel)]
     if getattr(args, "headphones_mac", None):
         cfg.headphones.mac = args.headphones_mac
     if getattr(args, "device_name", None):
@@ -86,6 +90,75 @@ def _build_sink(cfg: Config) -> AudioSink:
     return create_sink(cfg, client)
 
 
+#: Attente maximale d'une bascule confiée au démon (secondes).
+SWITCH_TIMEOUT_S = 45.0
+
+
+def _via_daemon(cfg: Config, args: argparse.Namespace, command: str,
+                payload: dict[str, Any] | None, action: str) -> int | None:
+    """Confie la bascule au démon local s'il tourne (il voit les liens ouverts).
+
+    Renvoie le code de sortie s'il a pris la main, ``None`` pour continuer en
+    local (mode ``--direct``, ou aucun démon à l'écoute).
+    """
+    if getattr(args, "direct", False):
+        return None
+    try:
+        # Une bascule prend du temps : le démon refait plusieurs tentatives de
+        # connexion au casque (page timeout fréquent après une libération).
+        result = call_control(cfg, command, payload, timeout=args.timeout or SWITCH_TIMEOUT_S)
+    except ControlUnavailable as exc:
+        log.debug("pas de démon local (%s): la bascule est pilotée par le CLI", exc)
+        return None
+    except (ConfigError, proto.RemoteError, TimeoutError) as exc:
+        return _fail(str(exc))
+    _emit(result, args.json, _switch_summary(action, result))
+    return EXIT_OK if result.get("ok") else EXIT_FAILURE
+
+
+def _build_switchboard(cfg: Config, sink: AudioSink, args: argparse.Namespace):
+    """Construit le coordinateur multi-pairs (résolution des noms via BlueZ)."""
+    from .switch import Switchboard
+
+    resolver = None
+    if not getattr(args, "no_resolve", False):
+        try:
+            client = bluez.open_client("auto")
+            resolver = lambda peer: bluez.resolve_peer_mac(peer, client)  # noqa: E731
+        except bluez.BluezError as exc:
+            def resolver(peer: PeerConfig, _exc: Exception = exc) -> str:  # type: ignore[misc]
+                if peer.mac:
+                    return peer.mac
+                raise bluez.BluezError(
+                    f"{_exc} : impossible de résoudre « {peer.label()} » par son nom, "
+                    "renseignez peers[].mac"
+                )
+    return Switchboard(cfg, sink, resolver=resolver, logger=log)
+
+
+def _failures_text(result: dict[str, Any]) -> str:
+    return "; ".join(
+        f"{item.get('peer')}: {item.get('error')}" for item in result.get("failures") or []
+    )
+
+
+def _switch_summary(action: str, result: dict[str, Any]) -> str:
+    """Résumé lisible d'une bascule (take/give)."""
+    holders = ", ".join(result.get("holders") or [])
+    if action == "take":
+        if not result.get("ok"):
+            return f"bascule incomplète — {_failures_text(result) or 'erreur inconnue'}"
+        grabbed = result.get("grabbed") or {}
+        local = "connectés" if grabbed.get("connected") else "connexion incertaine"
+        return (f"écouteurs récupérés — libérés par: {holders or 'personne'}; "
+                f"côté local: {local}")
+    if not result.get("ok"):
+        return f"restitution incomplète — {_failures_text(result) or 'erreur inconnue'}"
+    grabbed = result.get("grabbed") or {}
+    return (f"écouteurs rendus à « {result.get('peer')} » "
+            f"({'connectés là-bas' if grabbed.get('connected') else 'reconnexion à confirmer'})")
+
+
 def _audio_human(state: dict) -> str:
     name = state.get("name") or state.get("mac") or "casque"
     if not state.get("found", True):
@@ -101,16 +174,18 @@ def cmd_init(args: argparse.Namespace) -> int:
     cfg.device_name = args.device_name or cfg.device_name
     cfg.headphones.mac = args.headphones_mac or ""
     cfg.headphones.name = args.headphones_name or ""
-    cfg.peer.mac = args.peer_mac or ""
-    cfg.peer.name = args.peer_name or ""
+    if args.peer_mac or args.peer_name:
+        cfg.peers = [PeerConfig(name=args.peer_name or "", mac=args.peer_mac or "")]
     cfg.transport.mode = args.transport or cfg.transport.mode
     if args.channel:
         cfg.transport.channel = args.channel
     if args.token:
         cfg.token = args.token
+    cfg.validate()
     path = cfg.save(args.config)
     print(f"configuration écrite dans {path}")
-    print("comprenez au minimum peer.mac (le téléphone) et headphones.mac (le casque).")
+    print("renseignez au minimum les pairs (blueco peers add <nom>) et le casque")
+    print("(`blueco devices` liste les adresses connues de BlueZ).")
     return EXIT_OK
 
 
@@ -149,8 +224,11 @@ def cmd_status(args: argparse.Namespace) -> int:
         "transport": cfg.transport.mode,
     }
     payload: dict[str, Any] = {"local": local}
-    if args.remote:
-        payload["peer"] = peer_state_event(BluecoClient(cfg), timeout=cfg.request_timeout_s)
+    query_peers = args.remote or args.all
+    if query_peers:
+        board = _build_switchboard(cfg, sink, args)
+        names = [args.from_peer] if args.from_peer else None
+        payload.update(board.snapshot(names))
     if args.json:
         _emit(payload, True)
         return EXIT_OK
@@ -159,36 +237,70 @@ def cmd_status(args: argparse.Namespace) -> int:
     if adapter:
         print(f"adaptateur    : {adapter.get('address', '?')} {adapter.get('name', '')}".rstrip())
     print(f"{'casque':<13} : {_audio_human(local['audio'])}")
-    if args.remote:
-        peer = payload["peer"]
-        if peer.get("reachable"):
-            remote = peer["status"]
-            print(f"pair          : joignable ({remote.get('device', '?')})")
-            print(f"{'casque pair':<13} : {_audio_human(remote.get('audio', {}))}")
-        else:
-            print(f"pair          : injoignable ({peer.get('error', '')})")
+    if query_peers:
+        reports = payload.get("peers", [])
+        if not reports:
+            print("pairs         : aucun pair configuré")
+        for report in reports:
+            if report.get("reachable"):
+                marker = "← détient les écouteurs" if report.get("holds_headphones") else ""
+                print(f"{report['peer']:<13} : joignable "
+                      f"[{report.get('device', '?')}] {_audio_human(report.get('audio', {}))} {marker}".rstrip())
+            else:
+                print(f"{report['peer']:<13} : injoignable ({report.get('error', '')})")
     return EXIT_OK
 
 
 def cmd_release(args: argparse.Namespace) -> int:
-    """Demande au pair de libérer le casque (déconnexion côté pair)."""
+    """Demande à un (ou tous les) pair(s) de libérer le casque."""
     cfg = _load_config(args)
-    if args.local:
+    timeout = args.timeout or cfg.request_timeout_s
+    if args.local or not cfg.peers:
         sink = _build_sink(cfg)
-        result = sink.release()
-        _emit(result, args.json, f"casque libéré localement: {result.get('released', '?')}")
+        if args.local:
+            result = sink.release()
+            _emit(result, args.json, f"casque libéré localement: {result.get('released', '?')}")
+            return EXIT_OK
+        result = BluecoClient(cfg).release(timeout=timeout)
+        _emit(result, args.json,
+              f"le pair a libéré le casque: {result.get('released', '?')} "
+              f"({'déconnecté' if result.get('was_connected') else 'déjà libre'})")
         return EXIT_OK
-    result = BluecoClient(cfg).release(timeout=args.timeout or cfg.request_timeout_s)
-    _emit(result, args.json,
-          f"le pair a libéré le casque: {result.get('released', '?')} "
-          f"({'déconnecté' if result.get('was_connected') else 'déjà libre'})")
-    return EXIT_OK
+
+    board = _build_switchboard(cfg, _build_sink(cfg), args)
+    targets = board.selected([args.from_peer] if args.from_peer else None)
+    results: list[dict[str, Any]] = []
+    for peer in targets:
+        try:
+            outcome = board.client(peer).release(timeout=timeout)
+            results.append({"peer": peer.label(), "ok": True, **outcome})
+        except Exception as exc:  # pair éteint, refus, délai…
+            results.append({"peer": peer.label(), "ok": False,
+                            "error": f"{type(exc).__name__}: {exc}"})
+    if args.json:
+        _emit(results, True)
+        return EXIT_OK if any(item["ok"] for item in results) else EXIT_FAILURE
+    for item in results:
+        if not item["ok"]:
+            print(f"{item['peer']:<13} : échec ({item['error']})")
+        elif item.get("was_connected"):
+            print(f"{item['peer']:<13} : a libéré les écouteurs")
+        else:
+            print(f"{item['peer']:<13} : ne les détenait pas (déjà libre)")
+    return EXIT_OK if any(item["ok"] for item in results) else EXIT_FAILURE
 
 
 def cmd_grab(args: argparse.Namespace) -> int:
     cfg = _load_config(args)
+    timeout = args.timeout or cfg.request_timeout_s
     if args.remote:
-        result = BluecoClient(cfg).grab(timeout=args.timeout or cfg.request_timeout_s)
+        if args.to_peer or args.from_peer:
+            board = _build_switchboard(cfg, _build_sink(cfg), args)
+            peer = cfg.require_peer(args.to_peer or args.from_peer)
+            result = board.client(peer).grab(timeout=timeout)
+            _emit(result, args.json, f"« {peer.label()} » a repris le casque: {result.get('mac', '?')}")
+            return EXIT_OK
+        result = BluecoClient(cfg).grab(timeout=timeout)
         _emit(result, args.json, f"le pair a repris le casque: {result.get('mac', '?')}")
         return EXIT_OK
     sink = _build_sink(cfg)
@@ -198,36 +310,134 @@ def cmd_grab(args: argparse.Namespace) -> int:
 
 
 def cmd_take(args: argparse.Namespace) -> int:
-    """Bouton « je prends le casque » depuis le PC."""
+    """Bouton « je prends les écouteurs » : qui les détient doit les libérer."""
     cfg = _load_config(args)
     sink = _build_sink(cfg)
-    client = BluecoClient(cfg)
-    steps: list[tuple[str, Any]] = []
-    if not args.skip_release:
-        result = client.release(timeout=args.timeout or cfg.request_timeout_s)
-        steps.append(("pair.release", result))
-    steps.append(("local.grab", sink.grab()))
-    if args.json:
-        _emit(dict(steps), True)
-    else:
-        for name, result in steps:
-            print(f"{name:<14} ok {result}")
-    return EXIT_OK
+    handled = _via_daemon(cfg, args, proto.CMD_TAKE,
+                          {"from": args.from_peer} if args.from_peer else None,
+                          "take")
+    if handled is not None:
+        return handled
+
+    if not cfg.peers:
+        # Aucun pair configuré (ou mode unix de diagnostic) : un seul interlocuteur.
+        client = BluecoClient(cfg)
+        steps: list[tuple[str, Any]] = []
+        if not args.skip_release:
+            steps.append(("pair.release", client.release(timeout=args.timeout or cfg.request_timeout_s)))
+        steps.append(("local.grab", sink.grab()))
+        if args.json:
+            _emit(dict(steps), True)
+        else:
+            for name, result in steps:
+                print(f"{name:<14} ok {result}")
+        return EXIT_OK
+
+    board = _build_switchboard(cfg, sink, args)
+    result = board.take(source=args.from_peer, skip_release=args.skip_release)
+    _emit(result, args.json, _switch_summary("take", result))
+    return EXIT_OK if result.get("ok") else EXIT_FAILURE
 
 
 def cmd_give(args: argparse.Namespace) -> int:
-    """Bouton « je rends le casque » depuis le PC."""
+    """Bouton « je rends les écouteurs » : je les libère, le pair visé se connecte."""
     cfg = _load_config(args)
     sink = _build_sink(cfg)
-    client = BluecoClient(cfg)
-    steps: list[tuple[str, Any]] = [("local.release", sink.release())]
-    if not args.skip_grab:
-        steps.append(("pair.grab", client.grab(timeout=args.timeout or cfg.request_timeout_s)))
+    args_payload: dict[str, Any] = {}
+    if args.to_peer:
+        args_payload["to"] = args.to_peer
+    if args.skip_grab:
+        args_payload["skip_grab"] = True
+    handled = _via_daemon(cfg, args, proto.CMD_GIVE, args_payload or None, "give")
+    if handled is not None:
+        return handled
+
+    if not cfg.peers:
+        client = BluecoClient(cfg)
+        steps: list[tuple[str, Any]] = [("local.release", sink.release())]
+        if not args.skip_grab:
+            steps.append(("pair.grab", client.grab(timeout=args.timeout or cfg.request_timeout_s)))
+        if args.json:
+            _emit(dict(steps), True)
+        else:
+            for name, result in steps:
+                print(f"{name:<14} ok {result}")
+        return EXIT_OK
+
+    board = _build_switchboard(cfg, sink, args)
+    result = board.give(target=args.to_peer, skip_grab=args.skip_grab)
+    _emit(result, args.json, _switch_summary("give", result))
+    return EXIT_OK if result.get("ok") else EXIT_FAILURE
+
+
+def cmd_peers(args: argparse.Namespace) -> int:
+    """Lister, ajouter ou retirer les appareils avec qui basculer."""
+    cfg = _load_config(args)
+    action = args.action or "list"
+
+    if action == "add":
+        if not args.name:
+            return _fail("précisez un nom de pair: blueco peers add bureau [--mac AA:..]")
+        peer = PeerConfig(
+            name=args.name,
+            mac=args.mac or "",
+            bluetooth_name=args.bt_name or "",
+            mode=args.transport or "",
+            channel=args.channel or cfg.transport.channel,
+        )
+        try:
+            cfg.validate()
+            cfg.add_peer(peer)
+            cfg.validate()
+        except ConfigError as exc:
+            return _fail(str(exc))
+        path = cfg.save(args.config)
+        print(f"pair « {peer.label()} » enregistré dans {path}")
+        print("vérifiez la résolution de son adresse : blueco peers")
+        return EXIT_OK
+
+    if action == "rm":
+        if not args.name:
+            return _fail("précisez le nom du pair à retirer: blueco peers rm bureau")
+        if not cfg.remove_peer(args.name):
+            return _fail(f"pair inconnu: « {args.name} » (pairs: {cfg.peer_labels() or 'aucun'})")
+        path = cfg.save(args.config)
+        print(f"pair « {args.name} » retiré ({path})")
+        return EXIT_OK
+
+    # list
+    client = None
+    try:
+        client = bluez.open_client("auto")
+    except bluez.BluezError as exc:
+        log.info("BlueZ indisponible (%s): les adresses ne seront pas résolues", exc)
+    rows: list[dict[str, Any]] = []
+    for peer in cfg.peers:
+        mac = peer.mac
+        note = ""
+        if not mac and client is not None:
+            try:
+                mac = bluez.resolve_peer_mac(peer, client)
+                note = "résolu via BlueZ"
+            except bluez.BluezError as exc:
+                note = str(exc)
+        elif mac:
+            note = "figée dans la configuration"
+        rows.append({"peer": peer.label(), "name": peer.name, "mac": mac,
+                     "channel": peer.channel, "mode": peer.mode or cfg.transport.mode,
+                     "token": bool(peer.token or cfg.token), "note": note})
     if args.json:
-        _emit(dict(steps), True)
-    else:
-        for name, result in steps:
-            print(f"{name:<14} ok {result}")
+        _emit(rows, True)
+        return EXIT_OK
+    if not rows:
+        print("aucun pair configuré")
+        print("ajoutez-en un : blueco peers add bureau     # puis vérifiez la résolution")
+        return EXIT_OK
+    width = max(len(str(row["peer"])) for row in rows)
+    for row in rows:
+        state = row["mac"] or "(non résolu)"
+        print(f"{str(row['peer']).ljust(width)}  {state:<17}  "
+              f"canal {row['channel']}  {row['mode']}  {row['note']}".rstrip())
     return EXIT_OK
 
 
@@ -254,6 +464,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     except TransportError as exc:
         raise SystemExit(f"transport indisponible: {exc}") from exc
     server = BluecoServer(cfg, sink, listener)
+    control: ControlServer | None = None
     stop = threading.Event()
 
     def _stop(signum: int, _frame: object) -> None:
@@ -278,11 +489,18 @@ def cmd_serve(args: argparse.Namespace) -> int:
             server.stop()
         return EXIT_OK
 
+    control = ControlServer(server)
+    control.start()
     print(f"blueco {__version__} écoute sur {listener.describe()} (Ctrl-C pour arrêter)")
+    print(f"canal de contrôle local : {cfg.transport.resolved_control_socket()}")
+    print("  → `blueco take` et `blueco give` s'en servent pour agir sur les liens ouverts")
     try:
         server.serve_forever(stop)
     except KeyboardInterrupt:  # pragma: no cover
         server.stop()
+    finally:
+        if control is not None:
+            control.stop()
     return EXIT_OK
 
 
@@ -325,6 +543,9 @@ OPTION_DEFAULTS: dict[str, Any] = {
     "fake": False,
     "json": False,
     "device_name": None,
+    "peer_mac": None,
+    "no_resolve": False,
+    "direct": False,
     "verbose": 0,
 }
 
@@ -347,6 +568,12 @@ def _common_options() -> argparse.ArgumentParser:
                         help="sortie JSON")
     common.add_argument("--device-name", default=argparse.SUPPRESS,
                         help="nom logique de cet appareil")
+    common.add_argument("--peer-mac", default=argparse.SUPPRESS,
+                        help="viser un seul pair par son adresse MAC (écrase « peers »)")
+    common.add_argument("--no-resolve", action="store_true", default=argparse.SUPPRESS,
+                        help="ne pas résoudre les noms de pairs via BlueZ")
+    common.add_argument("--direct", action="store_true", default=argparse.SUPPRESS,
+                        help="ignorer le démon local et agir depuis ce processus")
     common.add_argument("-v", "--verbose", action="count", default=argparse.SUPPRESS,
                         help="-v: info, -v -v: debug")
     return common
@@ -363,8 +590,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_init = sub.add_parser("init", parents=[common], help="écrire un fichier de configuration")
-    p_init.add_argument("--peer-mac")
-    p_init.add_argument("--peer-name")
+    p_init.add_argument("--peer-name", help="étiquette du pair à enregistrer (ex. « téléphone »)")
     p_init.add_argument("--headphones-mac")
     p_init.add_argument("--headphones-name")
     p_init.add_argument("--token")
@@ -373,29 +599,42 @@ def build_parser() -> argparse.ArgumentParser:
     p_devices = sub.add_parser("devices", parents=[common], help="lister les appareils connus de BlueZ")
     p_devices.set_defaults(func=cmd_devices)
 
-    p_status = sub.add_parser("status", parents=[common], help="état local et, avec --remote, état du pair")
-    p_status.add_argument("--remote", action="store_true", help="interroger aussi le pair")
+    p_status = sub.add_parser("status", parents=[common], help="état local et, avec --remote/--all, état des pairs")
+    p_status.add_argument("--remote", action="store_true", help="interroger aussi les pairs")
+    p_status.add_argument("--all", action="store_true", help="interroger tous les pairs configurés")
+    p_status.add_argument("--from", dest="from_peer", help="interroger seulement ce pair")
     p_status.set_defaults(func=cmd_status)
 
     p_release = sub.add_parser("release", parents=[common], help="libérer le casque (--local sinon côté pair)")
     p_release.add_argument("--local", action="store_true", help="déconnecter localement au lieu du pair")
+    p_release.add_argument("--from", dest="from_peer", help="ne demander qu'à ce pair")
     p_release.add_argument("--timeout", type=float)
     p_release.set_defaults(func=cmd_release)
 
     p_grab = sub.add_parser("grab", parents=[common], help="connecter le casque (--remote pour le pair)")
     p_grab.add_argument("--remote", action="store_true", help="demander au pair de connecter")
+    p_grab.add_argument("--to", dest="to_peer", help="le pair qui doit reprendre les écouteurs")
     p_grab.add_argument("--timeout", type=float)
     p_grab.set_defaults(func=cmd_grab)
 
     p_take = sub.add_parser("take", parents=[common], help="je prends le casque: le pair le libère puis je me connecte")
+    p_take.add_argument("--from", dest="from_peer", help="ne s'adresser qu'à ce pair (défaut: tous)")
     p_take.add_argument("--skip-release", action="store_true")
     p_take.add_argument("--timeout", type=float)
     p_take.set_defaults(func=cmd_take)
 
     p_give = sub.add_parser("give", parents=[common], help="je rends le casque: je le libère puis le pair se connecte")
+    p_give.add_argument("--to", dest="to_peer", help="le pair qui doit reprendre les écouteurs")
     p_give.add_argument("--skip-grab", action="store_true")
     p_give.add_argument("--timeout", type=float)
     p_give.set_defaults(func=cmd_give)
+
+    p_peers = sub.add_parser("peers", parents=[common], help="lister, ajouter ou retirer les pairs")
+    p_peers.add_argument("action", nargs="?", choices=("list", "add", "rm"), default="list")
+    p_peers.add_argument("name", nargs="?", help="étiquette du pair")
+    p_peers.add_argument("--mac", help="adresse MAC (sinon résolue via BlueZ à l'exécution)")
+    p_peers.add_argument("--bt-name", help="nom Bluetooth si différent de l'étiquette")
+    p_peers.set_defaults(func=cmd_peers)
 
     p_ping = sub.add_parser("ping", parents=[common], help="tester la liaison avec le pair")
     p_ping.add_argument("--timeout", type=float)

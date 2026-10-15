@@ -44,8 +44,34 @@ BLUEZ_SERVICE = "org.bluez"
 PROFILE_MANAGER_IFACE = "org.bluez.ProfileManager1"
 PROFILE_IFACE = "org.bluez.Profile1"
 OBJECT_MANAGER_IFACE = "org.freedesktop.DBus.ObjectManager"
-PROFILE_BUS_NAME = "org.blueco.Profile1"
 PROFILE_PATH = "/org/blueco/profile1"
+BLUEZ_ROOT = "/org/bluez"
+
+#: UUID du profil SPP (Serial Port), identique côté Android.
+SPP_UUID = "00001101-0000-1000-8000-00805f9b34fb"
+
+#: Enregistrement SDP du profil SPP, à publier auprès de BlueZ.
+#:
+#: BlueZ 5.87 **ne publie rien tout seul** : ``RegisterProfile`` réussit, mais
+#: aucun enregistrement n'arrive dans la base SDP, et le pair distant repart
+#: avec « SDP - No Attributes Returned for target UUID » (constaté dans les
+#: journaux Bluetooth d'Android) avant d'échouer sur le canal 1. Fournir cet
+#: enregistrement est donc indispensable : c'est lui qui annonce l'UUID SPP et
+#: le canal RFCOMM à utiliser.
+SPP_SERVICE_RECORD = """<?xml version="1.0" encoding="UTF-8" ?>
+<record>
+  <attribute id="0x0001"><sequence><uuid value="0x1101" /></sequence></attribute>
+  <attribute id="0x0004">
+    <sequence>
+      <sequence><uuid value="0x0100" /></sequence>
+      <sequence><uuid value="0x0003" /><uint8 value="0x{channel:02x}" /></sequence>
+    </sequence>
+  </attribute>
+  <attribute id="0x0005"><sequence><uuid value="0x1002" /></sequence></attribute>
+  <attribute id="0x0009"><sequence><sequence><uuid value="0x1101" /><uint16 value="0x0100" /></sequence></sequence></attribute>
+  <attribute id="0x0100"><text value="{name}" /></attribute>
+</record>
+"""
 
 BDADDR_ANY = getattr(socket, "BDADDR_ANY", "00:00:00:00:00:00")
 RFCOMM_AVAILABLE = hasattr(socket, "BTPROTO_RFCOMM") and hasattr(socket, "AF_BLUETOOTH")
@@ -258,6 +284,7 @@ class Profile1Listener(Listener):
         self._thread: threading.Thread | None = None
         self._fallback: RfcommListener | None = None
         self._registered = False
+        self._name: Any = None
         self._bus: Any = None
         self._profile: Any = None
         self._manager: Any = None
@@ -285,13 +312,16 @@ class Profile1Listener(Listener):
             raise TransportError(f"bus système D-Bus indisponible: {exc}") from exc
 
         adapter_path = self._find_adapter_path()
-        try:
-            self._name = dbus.service.BusName(PROFILE_BUS_NAME, bus=self._bus)
-        except dbus.exceptions.DBusException as exc:  # pragma: no cover
-            raise TransportError(f"impossible de réserver {PROFILE_BUS_NAME}: {exc}") from exc
 
+        # On n'essaie PAS de posséder un nom bien connu : depuis la version 2.26
+        # de D-Bus, ``/usr/share/dbus-1/system.conf`` contient ``<deny own="*"/>``
+        # et seul root peut prendre un nom sur le bus système. BlueZ n'en a pas
+        # besoin : il identifie le profil par le nom *unique* de la connexion
+        # appelante (``:1.42``) et l'objet ``org.bluez.Profile1`` exporté dessus.
+        # On utilise donc une connexion privée, sans nom.
         owner = _ProfileOwner(self._bus, PROFILE_PATH, self._queue, log)
         self._profile = owner
+        self._name = None
 
         transport = self._config.transport
         options = {
@@ -305,10 +335,28 @@ class Profile1Listener(Listener):
             if not record_path.is_file():
                 raise TransportError(f"transport.service_record introuvable: {record_path}")
             options["ServiceRecord"] = record_path.read_text(encoding="utf-8")
-        if transport.channel:
-            options["Channel"] = self._dbus.UInt16(transport.channel)
+            log.info("enregistrement SDP fourni par %s", record_path)
+        elif transport.uuid.lower() == SPP_UUID:
+            # Sans cet enregistrement, BlueZ accepte le profil mais ne publie
+            # aucun service : le téléphone ne trouve pas l'UUID et échoue.
+            options["ServiceRecord"] = SPP_SERVICE_RECORD.format(
+                channel=transport.channel or 3,
+                name=transport.service_name or "blueco",
+            )
+            log.info("enregistrement SDP SPP généré (canal RFCOMM %s)", transport.channel or 3)
+        else:
+            log.warning(
+                "UUID %s sans enregistrement SDP : BlueZ ne publiera aucun service "
+                "(renseignez transport.service_record)",
+                transport.uuid,
+            )
+        # ``Channel`` n'est volontairement pas transmis quand un enregistrement
+        # est fourni : BlueZ lit le canal RFCOMM dans l'enregistrement lui-même,
+        # les deux valeurs ne peuvent donc pas diverger.
 
-        self._manager = dbus.Interface(self._bus.get_object(BLUEZ_SERVICE, adapter_path), PROFILE_MANAGER_IFACE)
+        # ``RegisterProfile`` vit sur ``/org/bluez`` (gestionnaire global), et non
+        # sur le chemin de l'adaptateur, qui n'expose que Adapter1/Media1/...
+        self._manager = dbus.Interface(self._bus.get_object(BLUEZ_SERVICE, BLUEZ_ROOT), PROFILE_MANAGER_IFACE)
         try:
             self._manager.RegisterProfile(
                 dbus.ObjectPath(PROFILE_PATH),
@@ -460,18 +508,27 @@ def connect_to(config: Config, *, timeout: float = 15.0,
             raise TransportError(f"connexion à {path} impossible: {exc}") from exc
         return SocketConnection(sock, peer=f"unix:{path}")
 
-    if not config.peer.mac:
-        raise TransportError("peer.mac non configuré: impossible d'ouvrir un canal RFCOMM")
+    peer = config.primary_peer()
+    if peer is None:
+        raise TransportError(
+            "connexion impossible: "
+            + ("aucun pair configuré" if not config.peers
+               else f"plusieurs pairs configurés ({config.peer_labels()}): visez-en un avec Config.for_peer()")
+        )
+    if not peer.mac:
+        raise TransportError(
+            f"pair « {peer.label()} » sans adresse MAC: impossible d'ouvrir un canal RFCOMM"
+        )
     if not RFCOMM_AVAILABLE:
         raise TransportError("ce Python n'a pas été compilé avec le support Bluetooth")
-    target_channel = channel if channel is not None else config.transport.channel
+    target_channel = channel if channel is not None else (peer.channel or config.transport.channel)
     sock = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM)
     sock.settimeout(timeout)
     try:
-        sock.connect((config.peer.mac, target_channel))
+        sock.connect((peer.mac, target_channel))
     except OSError as exc:
         sock.close()
         raise TransportError(
-            f"connexion RFCOMM vers {config.peer.mac} canal {target_channel} impossible: {exc}"
+            f"connexion RFCOMM vers {peer.mac} canal {target_channel} impossible: {exc}"
         ) from exc
-    return SocketConnection(sock, peer=f"{config.peer.mac}:{target_channel}")
+    return SocketConnection(sock, peer=f"{peer.mac}:{target_channel}")
