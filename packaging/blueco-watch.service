@@ -9,6 +9,10 @@ Type=simple
 # Adaptez --lock-command à votre environnement (GNOME, KDE, sway...).
 ExecStart=@BIN@ watch --interval 10 --failures 3 --lock-command "loginctl lock-session"
 Environment=PYTHONUNBUFFERED=1
+# Journal dans ~/.local/state/blueco/watch.log (voir blueco.service).
+StateDirectory=blueco
+StandardOutput=append:%S/blueco/watch.log
+StandardError=append:%S/blueco/watch.log
 Restart=on-failure
 RestartSec=10
 

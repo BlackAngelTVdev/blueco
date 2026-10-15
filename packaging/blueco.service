@@ -8,6 +8,12 @@ Type=simple
 # @BIN@ est remplacé à l'installation par le chemin réel du lanceur
 ExecStart=@BIN@ serve -v
 Environment=PYTHONUNBUFFERED=1
+# Journal dans ~/.local/state/blueco/daemon.log : certaines machines ne
+# conservent pas le journal utilisateur (journalctl --user vide), et sans cela
+# les messages du démon seraient tout simplement perdus.
+StateDirectory=blueco
+StandardOutput=append:%S/blueco/daemon.log
+StandardError=append:%S/blueco/daemon.log
 Restart=on-failure
 RestartSec=5
 

@@ -41,20 +41,32 @@ secrets.json
 
 # --- Android / Gradle -------------------------------------------------------
 android/.gradle/
+android/.kotlin/
 android/build/
 android/app/build/
+android/app/.cxx/
 android/local.properties
 .gradle/
+.kotlin/
+local.properties
 captures/
 *.apk
 *.aab
 *.ap_
 *.dex
 *.class
+*.hprof
+hs_err_pid*.log
 output-metadata.json
 proguard/mapping.txt
 release/
 keystore.properties
+
+# --- Chaîne Android installée en espace utilisateur -------------------------
+# scripts/setup-android-toolchain.sh installe JDK + SDK + Gradle DANS
+# ~/.cache/blueco (hors dépôt) : rien à ignorer ici, mais si vous préférez
+# installer la chaîne dans le dépôt, décommentez la ligne suivante.
+# .android-toolchain/
 
 # --- Clés de signature : ne jamais versionner -------------------------------
 *.jks

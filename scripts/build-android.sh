@@ -47,12 +47,23 @@ die()   { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; exit 1; }
 # --------------------------------------------------------------------------- #
 # 1. JDK
 # --------------------------------------------------------------------------- #
+# JDK : $JAVA_HOME, puis la chaîne installée en espace utilisateur par
+# scripts/setup-android-toolchain.sh, puis un java du PATH.
 if [[ -z "${JAVA_HOME:-}" ]]; then
-  if command -v java >/dev/null 2>&1; then
-    JAVA_HOME="$(dirname "$(dirname "$(readlink -f "$(command -v java)")")")"
-  else
-    die "aucun JDK trouvé. Sous Arch : sudo pacman -S jdk17-openjdk"
-  fi
+  for candidate in "$CACHE_DIR/jdk-17" "$CACHE_DIR/jdk" "$HOME/jdk-17"; do
+    if [[ -x "$candidate/bin/java" ]]; then
+      JAVA_HOME="$candidate"
+      break
+    fi
+  done
+fi
+if [[ -z "${JAVA_HOME:-}" ]] && command -v java >/dev/null 2>&1; then
+  JAVA_HOME="$(dirname "$(dirname "$(readlink -f "$(command -v java)")")")"
+fi
+if [[ -z "${JAVA_HOME:-}" ]]; then
+  die "aucun JDK trouvé.
+  Sans sudo : ./scripts/setup-android-toolchain.sh
+  Sous Arch : sudo pacman -S jdk17-openjdk"
 fi
 JAVA_MAJOR="$("$JAVA_HOME/bin/java" -version 2>&1 | sed -n '1s/.*version "\([0-9]*\).*/\1/p')"
 [[ -n "$JAVA_MAJOR" && "$JAVA_MAJOR" -ge 17 ]] || die "JDK 17+ requis (détecté: ${JAVA_MAJOR:-inconnu})"
@@ -65,6 +76,7 @@ info "JDK $JAVA_MAJOR ($JAVA_HOME)"
 find_sdk() {
   local candidates=(
     "${ANDROID_SDK_ROOT:-}" "${ANDROID_HOME:-}"
+    "$CACHE_DIR/android-sdk"
     "$HOME/Android/Sdk" "$HOME/android-sdk" "/opt/android-sdk"
     "/usr/lib/android-sdk"
   )
@@ -76,7 +88,9 @@ find_sdk() {
 
 if ! SDK_DIR="$(find_sdk)"; then
   die "SDK Android introuvable.
-  Installez-le puis relancez, par exemple :
+  Sans sudo, la voie la plus directe :
+    ./scripts/setup-android-toolchain.sh     # JDK + SDK + Gradle dans ~/.cache/blueco
+  Sinon, installation manuelle :
     sudo pacman -S android-sdk android-sdk-platform-tools   # Arch (AUR pour les build-tools)
   ou via les command-line-tools officiels :
     mkdir -p \$HOME/Android/Sdk/cmdline-tools && cd \$HOME/Android/Sdk/cmdline-tools
