@@ -25,5 +25,6 @@ blueco = "blueco.cli:main"
 [tool.setuptools]
 packages = ["blueco"]
 
-[tool.setuptools.package-data]
-blueco = ["../packaging/*"]
+# Les unités systemd, le PKGBUILD et la configuration d'exemple vivent dans
+# packaging/ et scripts/ : ils sont installés par ces scripts, pas par le paquet
+# Python (une entrée package-data ne peut pas pointer hors du paquet).

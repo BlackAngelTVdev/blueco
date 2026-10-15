@@ -137,6 +137,7 @@ android/           appli Android (Kotlin, sans dépendance externe)
 packaging/         unités systemd, PKGBUILD Arch, sudoers facultatif, config exemple
 scripts/           scripts de build (Linux Arch et Android)
 docs/              architecture, protocole, installation Linux, Android
+LICENSE            licence MIT
 ```
 
 ## Ce qui est vérifié, ce qui ne l'est pas
@@ -173,4 +174,5 @@ Non vérifiable dans cet environnement (à valider sur votre matériel) :
 
 ## Licence
 
-MIT (voir `LICENSE` si vous ajoutez le fichier ; à défaut, code fourni tel quel).
+MIT — voir [`LICENSE`](LICENSE). Le glyphe « bluetooth » de l'icône Android
+provient du jeu d'icônes Material Design (Apache-2.0).
