@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Thème de la plateforme : aucune dépendance AndroidX/appcompat requise. -->
+    <style name="Theme.Blueco" parent="@android:style/Theme.Material.Light.DarkActionBar" />
+</resources>
